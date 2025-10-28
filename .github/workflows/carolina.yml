@@ -1,9 +1,9 @@
-name: Georgia WSO Records Scraper
+name: Carolina WSO Records Scraper
 
 on:
   schedule:
     # Run daily at 5 AM UTC (midnight EST)
-    - cron: '15 3 * * *'
+    - cron: '25 3 * * *'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
@@ -30,7 +30,7 @@ jobs:
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          python scraper_ga_pnw.py \
-            --wso "Georgia" \
-            --sheet-url "https://docs.google.com/spreadsheets/d/1HM1H51pUmhoWDdSUp2RT-mCaUX2a8NB7aUSYVwWT0AU/edit?gid=908416148#gid=908416148"
+          python scraper_carolinas.py \
+            --wso "Carolina" \
+            --sheet-url "https://docs.google.com/spreadsheets/d/1rKFzpkLCT-FE2SzM0qpUOoZ788YHl7dg/view?gid=1785893123#gid=1785893123"
 

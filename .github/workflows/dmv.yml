@@ -3,7 +3,7 @@ name: DMV WSO Records Scraper
 on:
   schedule:
     # Run daily at 5 AM UTC (midnight EST)
-    - cron: '10 5 * * *'
+    - cron: '10 3 * * *'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
