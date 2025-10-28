@@ -1,9 +1,9 @@
-name: Ohio WSO Records Scraper
+name: DMV WSO Records Scraper
 
 on:
   schedule:
-    # Run daily at 2 AM UTC (9 PM EST / 10 PM EDT)
-    - cron: '0 5 * * *'
+    # Run daily at 5 AM UTC (midnight EST)
+    - cron: '10 5 * * *'
   workflow_dispatch: # Allow manual triggering
 
 jobs:
@@ -12,25 +12,25 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
       
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: '3.11'
       
       - name: Install dependencies
         run: |
+          python -m pip install --upgrade pip
           pip install -r requirements.txt
       
       - name: Run scraper
         env:
-          # GOOGLE_SERVICE_ACCOUNT_JSON is optional for public sheets
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
         run: |
-          python scraper_ohio.py \
-            --wso "Ohio" \
-            --sheet-url "https://docs.google.com/spreadsheets/d/1fX-Ft3PuLn8BCE2thhwPEXFTEUTN7yJGxWi7LMajAD8/view?gid=0#gid=0"
+          python scraper_dmv.py \
+            --wso "DMV" \
+            --sheet-url "https://docs.google.com/spreadsheets/d/1vYD2H6si9FyEO-Tc24DoFZOmST0r5hCn/edit?gid=799684986#gid=799684986"
 
