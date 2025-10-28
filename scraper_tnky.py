@@ -1,49 +1,6 @@
 #!/usr/bin/env python3
 """
 WSO Records Scraper - TN-KY Format
-
-For Tennessee-Kentucky WSO which uses a horizontal layout where:
-- Weight classes are columns
-- Each section has age_category + gender header
-- Three rows per lift type (value, name, date)
-
-KNOWN ISSUES (As of creation - 2025):
-=====================================================
-This scraper is INCOMPLETE and needs debugging before production use.
-TN-KY updates rarely, so manual updates may be more practical.
-
-Current Status:
-- ✅ Parses Junior and Senior categories (32 records)
-- ❌ Missing Youth categories (U13 "13 & Under", U17 "14-17 YO")
-- ❌ Missing Masters categories (all age groups: 35-39, 40-44, 45-49, etc.)
-
-Problems to Fix:
-1. Section header parsing is inconsistent:
-   - Row 1: "TN-KY WSO RECORDS YOUTH: MEN " with age in NEXT column "13 & Under 44 KG"
-   - Row 16: "YOUTH: WOMEN " with age in column 3 "13 & Under"
-   - Row 49: "JUNIORS: MEN" (plural, not "JUNIOR")
-   - The age info appears in different positions depending on the section
-   
-2. Age category mapping issues:
-   - "JUNIORS: MEN 15-20 years old" should map to "Junior"
-   - "14-17 YO" should map to "U17" (not U15)
-   - Multiple Masters sections (35-39, 40-44, 45-49, 50-54, 55-59, 60-64, etc.)
-   
-3. Weight class extraction from merged headers:
-   - First row has: "TN-KY WSO RECORDS YOUTH: MEN " with "13 & Under 44 KG" in next column
-   - Weight classes are embedded in the age descriptor column
-   
-4. The CSV export format is very messy due to merged cells in the original sheet
-
-Debugging Tips:
-- Check rows with: curl <csv_url> | grep -n "YOUTH\|SENIOR\|MASTER\|JUNIOR"
-- Section headers appear around rows: 1, 16, 27, 38, 49, 60, 71, 82, 94, 105, 116...
-- Each section has 11 rows (1 header + 1 weight row + 9 data rows)
-- May need to look 2-3 columns ahead to find age group info
-
-Recommendation: 
-Since TN-KY updates infrequently, consider manual updates or wait until 
-they have significant changes before investing time in full automation.
 """
 
 import os
@@ -57,6 +14,10 @@ from collections import defaultdict
 
 import requests
 from supabase import create_client, Client
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 
 class WSORecordsTNKYScraper:
@@ -182,41 +143,55 @@ class WSORecordsTNKYScraper:
             
             # Check if this is a section header (contains age group info)
             if row and row[0]:
+                # Combine first cell with column 2 for full header
+                # (TN-KY puts age info in column 2)
                 first_cell = row[0].strip()
+                age_info = row[2].strip() if len(row) > 2 else ""
+                full_header = f"{first_cell} {age_info}"
                 
                 # Try to parse as section header
-                age_cat, gender = self._normalize_age_category(first_cell)
+                age_cat, gender = self._normalize_age_category(full_header)
                 if age_cat and gender:
                     current_age_category = age_cat
                     current_gender = gender
                     
-                    # Next row should have weight classes
-                    if i + 1 < len(rows):
+                    # Check if current row has weight classes (first section case)
+                    # or if next row has weight classes (all other sections)
+                    has_weights_in_current = any('KG' in str(cell).upper() for cell in row[1:9])
+                    
+                    if has_weights_in_current:
+                        # First section: weight classes are in the same row as header
+                        weight_row = row
+                        weight_classes = self._parse_weight_classes(weight_row)
+                    elif i + 1 < len(rows):
+                        # Other sections: next row has weight classes
                         i += 1
                         weight_row = rows[i]
                         weight_classes = self._parse_weight_classes(weight_row)
+                    else:
+                        weight_classes = []
+                    
+                    # Process the data rows (SNATCH, Name, Date, C&J, Name, Date, TOTAL, Name, Date)
+                    if i + 9 < len(rows):
+                        snatch_data = self._parse_lift_rows(rows[i+1:i+4], weight_classes)
+                        cj_data = self._parse_lift_rows(rows[i+4:i+7], weight_classes)
+                        total_data = self._parse_lift_rows(rows[i+7:i+10], weight_classes)
                         
-                        # Process the data rows (SNATCH, Name, Date, C&J, Name, Date, TOTAL, Name, Date)
-                        if i + 9 < len(rows):
-                            snatch_data = self._parse_lift_rows(rows[i+1:i+4], weight_classes)
-                            cj_data = self._parse_lift_rows(rows[i+4:i+7], weight_classes)
-                            total_data = self._parse_lift_rows(rows[i+7:i+10], weight_classes)
-                            
-                            # Combine into records
-                            for weight_class in weight_classes:
-                                if weight_class:
-                                    record = {
-                                        'wso': self.wso_name,
-                                        'age_category': current_age_category,
-                                        'gender': current_gender,
-                                        'weight_class': weight_class,
-                                        'snatch_record': snatch_data.get(weight_class),
-                                        'cj_record': cj_data.get(weight_class),
-                                        'total_record': total_data.get(weight_class)
-                                    }
-                                    records.append(record)
-                            
-                            i += 9  # Skip the 9 data rows we just processed
+                        # Combine into records
+                        for weight_class in weight_classes:
+                            if weight_class:
+                                record = {
+                                    'wso': self.wso_name,
+                                    'age_category': current_age_category,
+                                    'gender': current_gender,
+                                    'weight_class': weight_class,
+                                    'snatch_record': snatch_data.get(weight_class),
+                                    'cj_record': cj_data.get(weight_class),
+                                    'total_record': total_data.get(weight_class)
+                                }
+                                records.append(record)
+                        
+                        i += 9  # Skip the 9 data rows we just processed
             
             i += 1
         
@@ -228,9 +203,11 @@ class WSORecordsTNKYScraper:
         for cell in row[1:]:  # Skip first column
             cell = cell.strip()
             if cell and 'KG' in cell.upper():
-                # Extract just the weight class (e.g., "40 KG" -> "40")
-                weight = re.sub(r'[^\d+]', '', cell)
-                if weight:
+                # Extract weight class - look for pattern like "44 KG" or "65+ KG" or "65+KG"
+                # Handle special case: "13 & Under 44 KG" should extract "44"
+                match = re.search(r'(\d+\+?)\s*KG', cell, re.IGNORECASE)
+                if match:
+                    weight = match.group(1)
                     weight_classes.append(weight)
                 else:
                     weight_classes.append(None)
@@ -406,25 +383,94 @@ class WSORecordsTNKYScraper:
         except Exception as e:
             print(f"✗ Failed to send Discord notification: {e}")
     
-    def run(self) -> None:
+    def run(self, dry_run: bool = False) -> None:
         """Main execution flow."""
         print(f"Starting scraper for {self.wso_name}")
         print(f"Sheet URL: {self.sheet_url}")
         
-        self.setup_supabase_client()
-        self.setup_discord()
+        if not dry_run:
+            self.setup_supabase_client()
+            self.setup_discord()
+        else:
+            print("🧪 DRY RUN MODE - No database or Discord operations")
+            self.setup_supabase_client()  # Still need for comparison
         
         print("Scraping Google Sheet...")
         records = self.scrape_sheet()
         print(f"Found {len(records)} records")
         
-        print("Upserting records to Supabase...")
-        self.upsert_records(records)
-        
-        print("Sending Discord notification...")
-        self.send_discord_notification()
+        if dry_run:
+            print("\n🔍 Comparing with database...")
+            self._dry_run_comparison(records)
+        else:
+            print("Upserting records to Supabase...")
+            self.upsert_records(records)
+            
+            print("Sending Discord notification...")
+            self.send_discord_notification()
         
         print("Done!")
+    
+    def _dry_run_comparison(self, scraped_records: List[Dict[str, Any]]):
+        """Compare scraped records with database without making changes."""
+        to_insert = []
+        to_update = []
+        
+        for record in scraped_records:
+            # Check if record exists in database
+            existing = self.supabase_client.table("wso_records").select("*").eq(
+                "wso", record["wso"]
+            ).eq(
+                "age_category", record["age_category"]
+            ).eq(
+                "gender", record["gender"]
+            ).eq(
+                "weight_class", record["weight_class"]
+            ).execute()
+            
+            if existing.data:
+                # Record exists, check if values changed
+                db_record = existing.data[0]
+                changed = False
+                changes = []
+                
+                for field in ["snatch_record", "cj_record", "total_record"]:
+                    db_val = db_record.get(field)
+                    new_val = record.get(field)
+                    if db_val != new_val:
+                        changed = True
+                        changes.append(f"{field}: {db_val} → {new_val}")
+                
+                if changed:
+                    to_update.append({
+                        "record": record,
+                        "changes": changes
+                    })
+            else:
+                # New record
+                to_insert.append(record)
+        
+        print(f"\n📊 Dry Run Results:")
+        print(f"  Records to INSERT: {len(to_insert)}")
+        print(f"  Records to UPDATE: {len(to_update)}")
+        print(f"  Records unchanged: {len(scraped_records) - len(to_insert) - len(to_update)}")
+        
+        if to_insert:
+            print(f"\n➕ New records ({len(to_insert)}):")
+            for rec in to_insert[:5]:  # Show first 5
+                print(f"  - {rec['age_category']} {rec['gender']} {rec['weight_class']}")
+            if len(to_insert) > 5:
+                print(f"  ... and {len(to_insert) - 5} more")
+        
+        if to_update:
+            print(f"\n🔄 Updated records ({len(to_update)}):")
+            for item in to_update[:5]:  # Show first 5
+                rec = item['record']
+                print(f"  - {rec['age_category']} {rec['gender']} {rec['weight_class']}")
+                for change in item['changes']:
+                    print(f"    {change}")
+            if len(to_update) > 5:
+                print(f"  ... and {len(to_update) - 5} more")
 
 
 def main():
@@ -432,11 +478,12 @@ def main():
     parser = argparse.ArgumentParser(description="WSO Records Scraper (TN-KY Format)")
     parser.add_argument("--wso", required=True, help="WSO name (should be 'Tennessee-Kentucky')")
     parser.add_argument("--sheet-url", required=True, help="Google Sheet URL")
+    parser.add_argument("--dry-run", action="store_true", help="Compare with database without making changes")
     
     args = parser.parse_args()
     
     scraper = WSORecordsTNKYScraper(args.wso, args.sheet_url)
-    scraper.run()
+    scraper.run(dry_run=args.dry_run)
 
 
 if __name__ == "__main__":
