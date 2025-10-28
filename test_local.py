@@ -59,10 +59,101 @@ def test_fetch_data(wso_name: str, sheet_url: str):
     return records
 
 
-def test_upsert_data(wso_name: str, sheet_url: str):
-    """Test 2: Fetch data and upsert to Supabase (with change tracking)."""
+def test_dry_run(wso_name: str, sheet_url: str):
+    """Test 2: Dry run - show what would be upserted without touching database."""
     print("\n" + "=" * 80)
-    print("TEST 2: UPSERTING DATA TO SUPABASE")
+    print("TEST 2: DRY RUN - PREVIEW UPSERT (NO DATABASE CHANGES)")
+    print("=" * 80)
+    
+    scraper = WSORecordsScraper(wso_name, sheet_url)
+    
+    # Setup clients
+    scraper.setup_google_client()
+    scraper.setup_supabase_client()
+    
+    # Scrape the sheet
+    print("\nScraping sheet...")
+    records = scraper.scrape_sheet()
+    print(f"✓ Fetched {len(records)} records")
+    
+    # Query database to see what would happen
+    print("\nAnalyzing what would be upserted...")
+    would_insert = []
+    would_update = []
+    would_skip = []
+    
+    for record in records:
+        # Query for existing record
+        existing = scraper.supabase_client.table("wso_records").select("*").match({
+            "wso": record["wso"],
+            "age_category": record["age_category"],
+            "gender": record["gender"],
+            "weight_class": record["weight_class"]
+        }).execute()
+        
+        if existing.data and len(existing.data) > 0:
+            # Record exists - check if update needed
+            existing_record = existing.data[0]
+            changes = {}
+            if existing_record.get("snatch_record") != record.get("snatch_record"):
+                changes["snatch_record"] = {
+                    "old": existing_record.get("snatch_record"),
+                    "new": record.get("snatch_record")
+                }
+            if existing_record.get("cj_record") != record.get("cj_record"):
+                changes["cj_record"] = {
+                    "old": existing_record.get("cj_record"),
+                    "new": record.get("cj_record")
+                }
+            if existing_record.get("total_record") != record.get("total_record"):
+                changes["total_record"] = {
+                    "old": existing_record.get("total_record"),
+                    "new": record.get("total_record")
+                }
+            
+            if changes:
+                would_update.append({**record, "changes": changes})
+            else:
+                would_skip.append(record)
+        else:
+            # Record doesn't exist - would be inserted
+            would_insert.append(record)
+    
+    # Display results
+    print("\n" + "=" * 80)
+    print("DRY RUN RESULTS")
+    print("=" * 80)
+    print(f"Would INSERT: {len(would_insert)} new records")
+    print(f"Would UPDATE: {len(would_update)} existing records")
+    print(f"Would SKIP: {len(would_skip)} unchanged records")
+    
+    if would_insert:
+        print("\n📝 Records that would be INSERTED:")
+        for record in would_insert[:10]:
+            print(f"  • {record['age_category']} | {record['gender']} | {record['weight_class']}")
+            print(f"    Snatch: {record.get('snatch_record')}, C&J: {record.get('cj_record')}, Total: {record.get('total_record')}")
+        if len(would_insert) > 10:
+            print(f"  ... and {len(would_insert) - 10} more")
+    
+    if would_update:
+        print("\n🔄 Records that would be UPDATED:")
+        for record in would_update[:10]:
+            print(f"  • {record['age_category']} | {record['gender']} | {record['weight_class']}")
+            for field, change in record['changes'].items():
+                print(f"    - {field}: {change['old']} → {change['new']}")
+        if len(would_update) > 10:
+            print(f"  ... and {len(would_update) - 10} more")
+    
+    if would_skip:
+        print(f"\n⏭️  {len(would_skip)} records would be skipped (no changes)")
+    
+    return {"would_insert": would_insert, "would_update": would_update, "would_skip": would_skip}
+
+
+def test_upsert_data(wso_name: str, sheet_url: str):
+    """Test 3: Fetch data and upsert to Supabase (with change tracking)."""
+    print("\n" + "=" * 80)
+    print("TEST 3: UPSERTING DATA TO SUPABASE")
     print("=" * 80)
     
     scraper = WSORecordsScraper(wso_name, sheet_url)
@@ -107,9 +198,9 @@ def test_upsert_data(wso_name: str, sheet_url: str):
 
 
 def test_discord_notification(wso_name: str, sheet_url: str):
-    """Test 3: Full run with Discord notification."""
+    """Test 4: Full run with Discord notification."""
     print("\n" + "=" * 80)
-    print("TEST 3: FULL RUN WITH DISCORD NOTIFICATION")
+    print("TEST 4: FULL RUN WITH DISCORD NOTIFICATION")
     print("=" * 80)
     
     scraper = WSORecordsScraper(wso_name, sheet_url)
@@ -133,9 +224,9 @@ def main():
     )
     parser.add_argument(
         "--test",
-        choices=["fetch", "upsert", "full"],
+        choices=["fetch", "dry-run", "upsert", "full"],
         default="fetch",
-        help="Test mode: fetch (only fetch data), upsert (fetch + upsert), full (complete run with Discord)"
+        help="Test mode: fetch (only fetch data), dry-run (preview upsert), upsert (fetch + upsert), full (complete run with Discord)"
     )
     
     args = parser.parse_args()
@@ -147,7 +238,7 @@ def main():
     
     # Check environment variables
     print("\nChecking environment variables...")
-    if args.test in ["upsert", "full"]:
+    if args.test in ["dry-run", "upsert", "full"]:
         if not os.getenv("SUPABASE_URL") or not os.getenv("SUPABASE_KEY"):
             print("❌ Error: SUPABASE_URL and SUPABASE_KEY must be set in .env file")
             sys.exit(1)
@@ -167,7 +258,14 @@ def main():
             print("\n✅ Test completed successfully!")
             print("\nNext steps:")
             print("1. Review the output above and check test_scraped_data.json")
-            print("2. If data looks correct, run: python test_local.py --test upsert")
+            print("2. If data looks correct, run: python test_local.py --test dry-run")
+        
+        elif args.test == "dry-run":
+            test_dry_run(args.wso, args.sheet_url)
+            print("\n✅ Test completed successfully!")
+            print("\nNext steps:")
+            print("1. Review what would be inserted/updated above")
+            print("2. If everything looks good, run: python test_local.py --test upsert")
         
         elif args.test == "upsert":
             test_upsert_data(args.wso, args.sheet_url)

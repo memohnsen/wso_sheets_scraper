@@ -219,6 +219,8 @@ class WSORecordsScraper:
         """
         
         records = []
+        seen_combinations = set()  # Track age_subdivision + weight_class to avoid duplicates
+        
         # For Junior and Senior, use the category name directly since they don't have subdivisions
         if age_category in ["Junior", "Senior"]:
             current_age_subdivision = age_category
@@ -232,15 +234,21 @@ class WSORecordsScraper:
         def save_current_record():
             """Helper to save the current record if complete."""
             if current_weight_class and current_age_subdivision:
-                records.append({
-                    'wso': self.wso_name,
-                    'age_category': current_age_subdivision,
-                    'gender': gender,
-                    'weight_class': current_weight_class,
-                    'snatch_record': current_snatch,
-                    'cj_record': current_cj,
-                    'total_record': current_total
-                })
+                # Create a unique key to check for duplicates
+                unique_key = (current_age_subdivision, current_weight_class)
+                
+                # Only save if we haven't seen this combination before
+                if unique_key not in seen_combinations:
+                    records.append({
+                        'wso': self.wso_name,
+                        'age_category': current_age_subdivision,
+                        'gender': gender,
+                        'weight_class': current_weight_class,
+                        'snatch_record': current_snatch,
+                        'cj_record': current_cj,
+                        'total_record': current_total
+                    })
+                    seen_combinations.add(unique_key)
         
         def parse_age_subdivision(text: str) -> str:
             """Convert age subdivision text to standard format."""
@@ -331,7 +339,7 @@ class WSORecordsScraper:
                     kg_match = re.search(r'(\d+)\s*kg', first_col.lower())
                     if kg_match:
                         weight_num = kg_match.group(1)
-                        current_weight_class = f"{weight_num} kg"
+                        current_weight_class = weight_num  # Store without " kg" to match database
                 
                 continue
             
@@ -345,7 +353,8 @@ class WSORecordsScraper:
                 weight_value = None
                 if len(row) > 3 and row[3].strip():
                     try:
-                        weight_value = float(row[3].strip())
+                        # Convert to int (weights are always whole numbers in kg)
+                        weight_value = int(float(row[3].strip()))
                     except ValueError:
                         pass
                 
@@ -370,8 +379,8 @@ class WSORecordsScraper:
                 # Save previous record if exists
                 save_current_record()
                 
-                # Start new weight class
-                current_weight_class = first_col
+                # Start new weight class (remove " kg" suffix to match database format)
+                current_weight_class = first_col.replace(" kg", "").replace("kg", "").strip()
                 current_snatch = None
                 current_cj = None
                 current_total = None
