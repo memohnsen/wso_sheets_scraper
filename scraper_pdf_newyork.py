@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
 """
-PDF Scraper for New England WSO Records
+PDF Scraper for New York WSO Records
 
-This scraper handles New England's table-structured PDF format.
+This scraper handles New York's table-structured PDF format.
 Uses pdfplumber's table extraction for reliable parsing.
 
 PDF Format:
-- Proper table structure with columns: Class, Lift, Name, Representing, Location/Meet, Weight, Date
-- Each weight class has 3 rows: Snatch, C&J, Total
-- "Standard" in Name column indicates qualifying standard (still counts as record until beaten)
-- Multiple sections for different age/gender categories
+- Proper table structure with columns: Wt. Class, Lift, Record, Name, Date, Event
+- Each weight class has 3 rows: Snatch, Clean and Jerk, Total
+- "Record Standard" in Name column indicates qualifying standard (still counts as record until beaten)
+- Multiple sections for different age/gender categories (e.g., "Youth Men", "Youth Women")
 
 USAGE:
   Dry-run (test without making changes):
-    source venv/bin/activate && python scraper_pdf_newengland.py --wso "New England" --pdf-url "https://www.newenglandweightlifting.com/_files/ugd/e5901f_19d48447ffc04c05a9220272a13219ca.pdf" --dry-run
+    source venv/bin/activate && python scraper_pdf_newyork.py --wso "New York" --pdf-url "https://www.nywso.com/_files/ugd/aba8a0_cb60cf1e1a9d4066ad8106c3e36526cc.pdf" --dry-run
 """
 
 import os
@@ -32,15 +32,15 @@ except ImportError:
     sys.exit(1)
 
 
-class WSORecordsNewEnglandScraper:
-    """Scraper for New England WSO records (table-structured PDF)."""
+class WSORecordsNewYorkScraper:
+    """Scraper for New York WSO records (table-structured PDF)."""
     
     def __init__(self, wso_name: str, pdf_url: str):
         """
         Initialize scraper.
         
         Args:
-            wso_name: Name of the WSO (should be "New England")
+            wso_name: Name of the WSO (should be "New York")
             pdf_url: URL to the PDF file
         """
         self.wso_name = wso_name
@@ -110,12 +110,12 @@ class WSORecordsNewEnglandScraper:
         """
         Parse section header to extract age category and gender.
         
-        Examples:
-        - "Open Men's Records" -> ("Senior", "Men")
-        - "Open Women's Records" -> ("Senior", "Women")
-        - "Junior Men's Records" -> ("Junior", "Men")
-        - "Youth 16-17 Men's Records" -> ("U17", "Men")
-        - "Masters 35-39 Men's Records" -> ("Masters 35", "Men")
+        Examples (New York format):
+        - "Youth Men" -> ("Youth", "Men")  # NY uses generic "Youth", not U13/U15/U17
+        - "Youth Women" -> ("Youth", "Women")
+        - "Junior Men" -> ("Junior", "Men")
+        - "Open Men" -> ("Senior", "Men")
+        - "Masters 35-39 Men" -> ("Masters 35", "Men")
         """
         header = header.strip()
         
@@ -128,17 +128,14 @@ class WSORecordsNewEnglandScraper:
             return None, None
         
         # Extract age category
-        if "Open" in header:
+        if "Senior" in header or "Open" in header:
             return "Senior", gender
         elif "Junior" in header:
             return "Junior", gender
-        elif "Youth" in header or "16-17" in header or "16/17" in header:
-            if "16-17" in header or "16/17" in header or "U17" in header:
-                return "U17", gender
-            elif "14-15" in header or "14/15" in header or "U15" in header:
-                return "U15", gender
-            elif "13" in header or "U13" in header or "13U" in header:
-                return "U13", gender
+        elif "Youth" in header:
+            # NY format: just "Youth Men" / "Youth Women" (no age subdivision)
+            # Keep as "Youth" - they don't use U13/U15/U17
+            return "Youth", gender
         elif "Masters" in header:
             # Extract age: "Masters 35-39" -> "Masters 35"
             import re
@@ -180,8 +177,10 @@ class WSORecordsNewEnglandScraper:
                             continue
                         
                         # Check if this is a section header row
+                        # NY format: "Youth Men", "Youth Women", "Junior Men", "Senior Men", etc.
                         first_cell = str(row[0] or "").strip()
-                        if "Records" in first_cell:
+                        if ("Youth" in first_cell or "Junior" in first_cell or "Senior" in first_cell or "Open" in first_cell or "Masters" in first_cell) and \
+                           ("Men" in first_cell or "Women" in first_cell):
                             age_cat, gender = self._parse_section_header(first_cell)
                             if age_cat and gender:
                                 current_age_category = age_cat
@@ -214,16 +213,18 @@ class WSORecordsNewEnglandScraper:
                             current_total = None
                         
                         # Parse lift data
-                        # Columns: Class, Lift, Name, Representing, Location/Meet, Weight, Date
-                        if len(row) >= 6:
+                        # Columns: Wt. Class, Lift, Record, Name, Date, Event
+                        if len(row) >= 4:
                             lift_type = str(row[1] or "").strip()
-                            name = str(row[2] or "").strip()
-                            weight_value = str(row[5] or "").strip()
+                            record_value = str(row[2] or "").strip()  # Column 2 has the weight value
+                            name = str(row[3] or "").strip()  # Column 3 has the name
                             
-                            # "Open" means no record set yet (treat as NULL)
-                            # "Standard" with a weight value means qualifying standard (treat as actual record)
+                            # "Record Standard" means qualifying standard (still counts as record)
+                            # Remove " kg" from record value and parse
+                            weight_value = record_value.replace(" kg", "").replace("kg", "").strip()
+                            
                             # Empty weight means no record (treat as NULL)
-                            if name.upper() == "OPEN" or not weight_value:
+                            if not weight_value:
                                 weight_value = None
                             else:
                                 weight_value = self._parse_int(weight_value)
@@ -462,10 +463,10 @@ class WSORecordsNewEnglandScraper:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="PDF Scraper for New England WSO Records",
-        epilog="Example: python scraper_pdf_newengland.py --wso 'New England' --pdf-url 'https://example.com/records.pdf' --dry-run"
+        description="PDF Scraper for New York WSO Records",
+        epilog="Example: python scraper_pdf_newyork.py --wso 'New York' --pdf-url 'https://example.com/records.pdf' --dry-run"
     )
-    parser.add_argument("--wso", required=True, help="WSO name (should be 'New England')")
+    parser.add_argument("--wso", required=True, help="WSO name (should be 'New York')")
     parser.add_argument("--pdf-url", required=True, help="URL to the PDF file")
     parser.add_argument("--dry-run", action="store_true", help="Compare with database without making changes")
     
@@ -473,7 +474,7 @@ def main():
     
     load_dotenv()
     
-    scraper = WSORecordsNewEnglandScraper(args.wso, args.pdf_url)
+    scraper = WSORecordsNewYorkScraper(args.wso, args.pdf_url)
     scraper.run(dry_run=args.dry_run)
 
 
