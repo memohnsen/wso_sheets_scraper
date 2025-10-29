@@ -27,4 +27,7 @@ service-account.json
 # Logs
 *.log
 
+# Test data files
+test_*.json
+
 /helpers/
